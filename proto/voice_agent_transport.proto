@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package grpc.voice.agent;
+
+import "google/protobuf/struct.proto";
+
+// Voice transport service for bidirectional streaming of audio and data
+service VoiceAgentTransport {
+  // Bidirectional streaming for audio and data
+  rpc Stream(stream StreamMessage) returns (stream StreamMessage);
+}
+
+message StreamMessage {
+  string                 type = 1; // "audio" or "rtvi_message"
+  bytes                  raw  = 2;
+  google.protobuf.Struct data = 3;
+}

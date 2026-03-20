@@ -1,0 +1,51 @@
+# ---- 传输模式 ----
+transport: "grpc"                # "daily" | "grpc"
+
+# ---- 目标服务（Daily 模式）----
+server:
+  # url: "https://dev-voice-agent.example.com"  # 替换为实际地址
+  url: "http://localhost:8083"               # 本地测试
+
+# ---- gRPC 配置（gRPC 模式）----
+grpc:
+  # host: "localhost:8085"                # gRPC server 地址
+  host: "speed.smart-domi.app:443"   # 远程测试
+  tls: true                            # 远程 TLS 连接设为 true，本地测试设为 false
+  device_id: "devtest-sn-20260312134806-8288"       # 可选，默认自动生成
+  audio_encoding: "pcm"                 # "pcm" | "opus"
+
+# ---- 认证（两种模式共用）----
+auth:
+  token: "Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6Ikd2VE5GamxSVlJBdTRUanAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2xxY3l2YWlpcmJ3YnpudnN2bHd1LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiJmYjQ1OGVhNy0zYzNkLTRlNTAtOTJmZi03ZTJkNGQ2YzRhMjIiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzc0MzUwMjUwLCJpYXQiOjE3NzM5OTAyNTAsImVtYWlsIjoibGloYWljaGVuZzE4QGdtYWlsLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZ29vZ2xlIiwicHJvdmlkZXJzIjpbImdvb2dsZSJdfSwidXNlcl9tZXRhZGF0YSI6eyJhdmF0YXJfdXJsIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jS0dMZW9OaVo2S2dVMWFMdFJyYVdlS3cyUFhBSkpyakYtdTV3LTRYQURwTW5nQ05nPXM5Ni1jIiwiZW1haWwiOiJsaWhhaWNoZW5nMThAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZ1bGxfbmFtZSI6Iuadjua1t-aIkCIsImlzcyI6Imh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbSIsIm5hbWUiOiLmnY7mtbfmiJAiLCJwaG9uZV92ZXJpZmllZCI6ZmFsc2UsInBpY3R1cmUiOiJodHRwczovL2xoMy5nb29nbGV1c2VyY29udGVudC5jb20vYS9BQ2c4b2NLR0xlb05pWjZLZ1UxYUx0UnJhV2VLdzJQWEFKSnJqRi11NXctNFhBRHBNbmdDTmc9czk2LWMiLCJwcm92aWRlcl9pZCI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInNvdXJjZSI6IndlYiIsInN1YiI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInRpbWV6b25lIjoiQXNpYS9TaGFuZ2hhaSJ9LCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImFhbCI6ImFhbDEiLCJhbXIiOlt7Im1ldGhvZCI6Im9hdXRoIiwidGltZXN0YW1wIjoxNzcyNzgyNjg0fV0sInNlc3Npb25faWQiOiJkYmZhMDhhMy00ZGE0LTQwNDctYTc4YS02ODljNzQ2ZjMwZTkiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.FAKjw8KjxwBL-bo1RDjlbMLq-7cPapEHBNjELjImRMo"
+  family_id: "6adf918a-dc5f-4094-822b-8aef5570d230"          # 测试 family UUID（必填）
+  user_id: ""            # 测试 user UUID（必填）
+  timezone: "Asia/Shanghai"
+
+# ---- 测试参数 ----
+test:
+  audio_file: "audio/question_greeting.wav"   # 每轮播放的音频
+  max_wait_response: 50.0                      # 等待 bot 离开房间的超时（秒）
+  ramp_up_secs: 10.0                           # 全部 worker 启动所需时间
+  cooldown_between_levels: 60                  # 不同并发度之间的冷却（秒）
+  sample_rate: 16000                           # 音频采样率
+
+# ---- 并发度梯度 ----
+levels:
+  - name: "baseline"
+    concurrency: 1
+    duration_secs: 70
+  - name: "medium"
+    concurrency: 30
+    duration_secs: 300
+  - name: "high"
+    concurrency: 50
+    duration_secs: 300
+  - name: "peak"
+    concurrency: 100
+    duration_secs: 300
+
+# ---- CloudWatch 指标采集 ----
+cloudwatch:
+  region: "us-east-1"                          # AWS Region
+  log_group: "/ecs/domus/dev/voice-agent"      # CloudWatch Log Group 名称
+  profile: "domus-dev"                         # 可选：AWS CLI profile 名称，空则使用默认凭证链

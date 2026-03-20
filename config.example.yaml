@@ -1,0 +1,51 @@
+# ---- 传输模式 ----
+transport: "daily"                # "daily" | "grpc"
+
+# ---- 目标服务（Daily 模式）----
+server:
+  url: "https://dev-voice-agent.example.com"  # 替换为实际地址
+  # url: "http://localhost:8083"               # 本地测试
+
+# ---- gRPC 配置（gRPC 模式）----
+grpc:
+  host: "localhost:8085"                # gRPC server 地址（host:port 格式，不带 scheme）
+  # host: "dev-voice-agent.example.com:443"   # 远程测试
+  tls: false                            # 远程 TLS 连接设为 true，本地测试设为 false
+  device_id: "stress-test-device"       # 可选，默认自动生成
+  audio_encoding: "pcm"                 # "pcm" | "opus"
+
+# ---- 认证（两种模式共用）----
+auth:
+  token: ""              # Supabase JWT（必填）
+  family_id: ""          # 测试 family UUID（必填）
+  user_id: ""            # 测试 user UUID（Daily 模式使用）
+  timezone: "Asia/Shanghai"
+
+# ---- 测试参数 ----
+test:
+  audio_file: "audio/question_greeting.wav"   # 每轮播放的音频
+  max_wait_response: 30.0                      # 等待 bot 回复结束的超时（秒）
+  ramp_up_secs: 10.0                           # 全部 worker 启动所需时间
+  cooldown_between_levels: 60                  # 不同并发度之间的冷却（秒）
+  sample_rate: 16000                           # 音频采样率
+
+# ---- 并发度梯度 ----
+levels:
+  - name: "baseline"
+    concurrency: 3
+    duration_secs: 120
+  - name: "medium"
+    concurrency: 30
+    duration_secs: 300
+  - name: "high"
+    concurrency: 50
+    duration_secs: 300
+  - name: "peak"
+    concurrency: 100
+    duration_secs: 300
+
+# ---- CloudWatch 指标采集 ----
+cloudwatch:
+  region: "us-east-1"                          # AWS Region
+  log_group: "/ecs/domus/dev/voice-agent"      # CloudWatch Log Group 名称
+  profile: ""                                   # 可选：AWS CLI profile 名称，空则使用默认凭证链

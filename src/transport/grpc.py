@@ -1,0 +1,388 @@
+"""gRPC 双向流传输实现。"""
+
+import asyncio
+import logging
+import threading
+import time
+import uuid
+from typing import Optional
+
+import grpc
+import grpc.aio
+
+from transport import BaseTransport, TransportResult
+
+logger = logging.getLogger(__name__)
+
+# 标记会话结束的 RTVI 事件类型集合
+_COMPLETION_TYPES = {"turn-done", "conversation-end", "will-disconnect"}
+
+
+def _extract_rtvi_type(data_struct) -> Optional[str]:
+    """从 StreamMessage.data 中提取 RTVI 消息类型。
+
+    支持两种格式：
+    1. server-message 包装:
+       {"type": "server-message", "data": {"type": "turn-done"}} → "turn-done"
+    2. 直接 RTVI 事件:
+       {"type": "bot-tts-stopped", "label": "rtvi-ai"} → "bot-tts-stopped"
+    """
+    fields = data_struct.fields
+    msg_type = fields.get("type")
+    if not msg_type:
+        return None
+
+    type_str = msg_type.string_value
+
+    if type_str == "server-message":
+        inner_data = fields.get("data")
+        if inner_data and inner_data.struct_value:
+            inner_type = inner_data.struct_value.fields.get("type")
+            if inner_type:
+                return inner_type.string_value
+        return None
+
+    return type_str
+
+
+def _struct_to_dict(struct) -> dict:
+    """将 protobuf Struct 简单转为 dict 用于日志输出。"""
+    from google.protobuf.json_format import MessageToDict
+
+    try:
+        return MessageToDict(struct, preserving_proto_field_name=True)
+    except Exception:
+        return {"_raw_fields": list(struct.fields.keys())}
+
+
+class GrpcTransport(BaseTransport):
+    """
+    gRPC 双向流传输。
+
+    流程：
+    1. 建立 gRPC 双向流连接
+    2. 通过流发送音频帧（20ms PCM）
+    3. 从流接收 bot 回复：
+       - type="audio" → 检测 TTFA（首帧音频时间点）
+       - type="rtvi_message" → 解析生命周期事件
+       - bot-tts-stopped → 回传 bot-stopped-speaking 触发 turn-done
+       - turn-done → 标记 E2E 终点，关闭流
+    """
+
+    def __init__(
+        self,
+        session_id: int,
+        grpc_host: str,
+        auth_token: str,
+        device_id: str,
+        family_id: str,
+        sample_rate: int = 16000,
+        audio_encoding: str = "pcm",
+        tls: bool = False,
+        user_id: str = "",
+        timezone: str = "Asia/Shanghai",
+        source: str = "stress_test",
+        voice_key: str = "",
+        follow_up_mode_on: str = "off",
+        enable_analyze_frame_rate: str = "false",
+    ):
+        self.session_id = session_id
+        self._host = grpc_host
+        self._auth_token = auth_token
+        self._device_id = device_id
+        self._family_id = family_id
+        self._sample_rate = sample_rate
+        self._audio_encoding = audio_encoding
+        self._tls = tls
+        self._user_id = user_id
+        self._timezone = timezone
+        self._source = source
+        self._voice_key = voice_key
+        self._follow_up_mode_on = follow_up_mode_on
+        self._enable_analyze_frame_rate = enable_analyze_frame_rate
+
+        self.result = TransportResult()
+
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._send_queue: Optional[asyncio.Queue] = None
+        self._connected = threading.Event()
+        self._send_done = threading.Event()
+        self._conversation_end = threading.Event()
+        self._stop_speaking_at: Optional[float] = None
+        self._first_audio_at: Optional[float] = None
+        self._conversation_end_at: Optional[float] = None
+        self._error: Optional[str] = None
+        self._bot_stopped_sent = False
+
+    def connect(self) -> None:
+        t0 = time.perf_counter()
+
+        self._loop = asyncio.new_event_loop()
+        self._send_queue = asyncio.Queue()
+        self._thread = threading.Thread(
+            target=self._run_event_loop,
+            daemon=True,
+        )
+        self._thread.start()
+
+        if not self._connected.wait(timeout=15):
+            raise TimeoutError("gRPC 连接建立超时")
+        if self._error:
+            raise RuntimeError(f"gRPC 连接失败: {self._error}")
+
+        self.result.connect_ms = (time.perf_counter() - t0) * 1000
+
+    def send_audio(self, audio_pcm: bytes, sample_rate: int) -> None:
+        frame_duration_ms = 20
+        samples_per_frame = sample_rate * frame_duration_ms // 1000
+        bytes_per_frame = samples_per_frame * 2  # 16-bit mono
+        sleep_secs = frame_duration_ms / 1000
+
+        for offset in range(0, len(audio_pcm), bytes_per_frame):
+            frame = audio_pcm[offset : offset + bytes_per_frame]
+            asyncio.run_coroutine_threadsafe(
+                self._send_queue.put(frame),
+                self._loop,
+            ).result(timeout=5)
+            time.sleep(sleep_secs)
+
+        self._stop_speaking_at = time.perf_counter()
+        self._send_done.set()
+
+    def wait_for_completion(self, timeout: float) -> TransportResult:
+        self._conversation_end.wait(timeout=timeout)
+
+        if self._error:
+            self.result.success = False
+            self.result.error = self._error
+        elif not self._conversation_end.is_set():
+            self.result.success = False
+            self.result.error = "等待 turn-done 超时"
+        else:
+            self.result.success = True
+
+        if self._first_audio_at and self._stop_speaking_at:
+            self.result.client_ttfa_ms = round(
+                (self._first_audio_at - self._stop_speaking_at) * 1000, 2
+            )
+        if self._conversation_end_at and self._stop_speaking_at:
+            self.result.client_e2e_ms = round(
+                (self._conversation_end_at - self._stop_speaking_at) * 1000, 2
+            )
+        if self._first_audio_at is None and self.result.success:
+            self.result.success = False
+            self.result.error = "未收到 bot 音频回复"
+
+        return self.result
+
+    def close(self) -> None:
+        self._conversation_end.set()
+        if self._loop and self._loop.is_running():
+            # 向 send_queue 发送 None 让 request_iter 正常退出
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._send_queue.put(None),
+                    self._loop,
+                ).result(timeout=2)
+            except Exception:
+                pass
+        # 等待 event loop 自然结束
+        if self._thread:
+            self._thread.join(timeout=5)
+        # 如果仍未退出，强制停止
+        if self._thread and self._thread.is_alive():
+            if self._loop and self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(timeout=3)
+
+    # ──── 内部异步逻辑 ────
+
+    def _run_event_loop(self):
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_until_complete(self._async_session())
+        except RuntimeError:
+            pass  # Event loop stopped externally during cleanup
+
+    async def _async_session(self):
+        from proto_generated import (
+            voice_agent_transport_pb2,
+            voice_agent_transport_pb2_grpc,
+        )
+        from google.protobuf.struct_pb2 import Struct
+
+        sid = self.session_id
+        if self._tls:
+            channel = grpc.aio.secure_channel(self._host, grpc.ssl_channel_credentials())
+        else:
+            channel = grpc.aio.insecure_channel(self._host)
+
+        try:
+            metadata = [
+                ("authorization", f"Bearer {self._auth_token}"),
+                ("x-device-id", self._device_id),
+                ("x-family-id", self._family_id),
+                ("x-user-id", self._user_id),
+                ("x-timezone", self._timezone),
+                ("x-source", self._source),
+                ("x-conversation-id", str(uuid.uuid4())),
+                ("x-audio-encoding", self._audio_encoding),
+                ("x-mode", "standard"),
+                ("x-follow-up-mode-on", self._follow_up_mode_on),
+                ("x-voice-key", self._voice_key),
+                ("x-enable-analyze-frame-rate", self._enable_analyze_frame_rate),
+            ]
+
+            stub = voice_agent_transport_pb2_grpc.VoiceAgentTransportStub(channel)
+
+            audio_meta = Struct()
+            audio_meta.update(
+                {
+                    "sample_rate": self._sample_rate,
+                    "channels": 1,
+                }
+            )
+
+            async def request_iter():
+                """双向流的请求迭代器。
+
+                支持发送两种消息：
+                - bytes: 包装为 audio StreamMessage
+                - StreamMessage: 直接发送（如 bot-stopped-speaking）
+                - None: 结束迭代器，关闭客户端发送流
+                """
+                self._connected.set()
+                logger.info("[Session %d] request_iter started", sid)
+                while True:
+                    item = await self._send_queue.get()
+                    if item is None:
+                        logger.info("[Session %d] request_iter 退出", sid)
+                        return
+                    if isinstance(
+                        item, voice_agent_transport_pb2.StreamMessage
+                    ):
+                        logger.info(
+                            "[Session %d] 发送 rtvi_message: %s",
+                            sid,
+                            item.type,
+                        )
+                        yield item
+                    else:
+                        yield voice_agent_transport_pb2.StreamMessage(
+                            type="audio",
+                            raw=item,
+                            data=audio_meta,
+                        )
+
+            def _create_bot_stopped_speaking_msg():
+                """构造 bot-stopped-speaking 确认消息。
+
+                服务端开启了 use_client_bot_stopped_speaking_event，
+                需要客户端在音频播放完成后回传此消息才能触发 turn-done。
+                """
+                data = Struct()
+                data.update(
+                    {
+                        "type": "client-message",
+                        "data": {
+                            "t": "bot_stopped_speaking",
+                            "d": None,
+                        },
+                        "id": str(uuid.uuid4()),
+                        "label": "rtvi-ai",
+                    }
+                )
+                return voice_agent_transport_pb2.StreamMessage(
+                    type="rtvi_message",
+                    data=data,
+                )
+
+            logger.info("[Session %d] 建立 gRPC 双向流...", sid)
+            stream = stub.Stream(request_iter(), metadata=metadata)
+
+            msg_count = 0
+            audio_count = 0
+            async for response in stream:
+                now = time.perf_counter()
+                msg_count += 1
+
+                if response.type == "audio" and len(response.raw) > 0:
+                    audio_count += 1
+                    if self._first_audio_at is None:
+                        self._first_audio_at = now
+                        logger.info(
+                            "[Session %d] 收到首帧音频 (第 %d 条消息)",
+                            sid,
+                            msg_count,
+                        )
+
+                elif response.type == "rtvi_message":
+                    event_type = _extract_rtvi_type(response.data)
+                    logger.info(
+                        "[Session %d] rtvi: %s (第 %d 条消息)",
+                        sid,
+                        event_type,
+                        msg_count,
+                    )
+
+                    # bot TTS 输出完成 → 回传 bot-stopped-speaking 触发 turn-done
+                    if (
+                        event_type == "bot-tts-stopped"
+                        and not self._bot_stopped_sent
+                    ):
+                        self._bot_stopped_sent = True
+                        logger.info(
+                            "[Session %d] 检测到 bot-tts-stopped, "
+                            "回传 bot-stopped-speaking",
+                            sid,
+                        )
+                        await self._send_queue.put(
+                            _create_bot_stopped_speaking_msg()
+                        )
+
+                    # 完成信号 → 记录时间 + 关闭流
+                    if event_type in _COMPLETION_TYPES:
+                        self._conversation_end_at = now
+                        self._conversation_end.set()
+                        logger.info(
+                            "[Session %d] 检测到完成信号: %s", sid, event_type
+                        )
+                        # 通知 request_iter 退出，优雅关闭客户端发送流
+                        await self._send_queue.put(None)
+
+                else:
+                    logger.debug(
+                        "[Session %d] 收到消息: type=%s",
+                        sid,
+                        response.type,
+                    )
+
+            logger.info(
+                "[Session %d] gRPC 流结束, 共收到 %d 条消息 (音频帧 %d)",
+                sid,
+                msg_count,
+                audio_count,
+            )
+
+            # 流结束但没收到完成信号（异常兜底）
+            if not self._conversation_end.is_set():
+                logger.warning(
+                    "[Session %d] 流已关闭但未收到完成信号，使用流结束时间作为兜底",
+                    sid,
+                )
+                self._conversation_end_at = time.perf_counter()
+                self._conversation_end.set()
+
+        except grpc.aio.AioRpcError as e:
+            self._error = f"gRPC 错误: {e.code()} - {e.details()}"
+            logger.error("[Session %d] %s", sid, self._error)
+            self._conversation_end.set()
+        except Exception as e:
+            self._error = str(e)
+            logger.error(
+                "[Session %d] 异常: %s", sid, self._error, exc_info=True
+            )
+            self._conversation_end.set()
+        finally:
+            await channel.close()

@@ -1,0 +1,33 @@
+[project]
+name = "voice_agent_stress_test"
+version = "0.1.0"
+description = "Voice Agent Stress Testing Tool"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "daily-python>=0.23.0",
+    "httpx>=0.28.1",
+    "pyyaml>=6.0",
+    "edge-tts>=6.1.0",
+    "loguru>=0.7.3",
+    "boto3>=1.35.0",
+    "grpcio>=1.70.0",
+    "grpcio-tools>=1.70.0",
+    "protobuf>=5.29.0",
+]
+
+[dependency-groups]
+dev = [
+    "black>=24.10.0",
+]
+
+[tool.black]
+line-length = 88
+
+[tool.uv]
+required-environments = [
+  "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+  "sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
