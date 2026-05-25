@@ -81,7 +81,7 @@ class GrpcTransport(BaseTransport):
         tls: bool = False,
         user_id: str = "",
         timezone: str = "Asia/Shanghai",
-        source: str = "stress_test",
+        source: str = "web",
         voice_key: str = "",
         follow_up_mode_on: str = "off",
         enable_analyze_frame_rate: str = "false",
@@ -114,6 +114,8 @@ class GrpcTransport(BaseTransport):
         self._conversation_end_at: Optional[float] = None
         self._error: Optional[str] = None
         self._bot_stopped_sent = False
+        self._bot_started_sent = False
+        self._current_tts_id: Optional[str] = None
 
     def connect(self) -> None:
         t0 = time.perf_counter()
@@ -158,7 +160,7 @@ class GrpcTransport(BaseTransport):
             self.result.error = self._error
         elif not self._conversation_end.is_set():
             self.result.success = False
-            self.result.error = "等待 turn-done 超时"
+            self.result.error = "等待完成信号超时（turn-done/conversation-end/will-disconnect）"
         else:
             self.result.success = True
 
@@ -275,11 +277,36 @@ class GrpcTransport(BaseTransport):
                             data=audio_meta,
                         )
 
-            def _create_bot_stopped_speaking_msg():
+            def _create_bot_started_speaking_msg(tts_id):
+                """构造 bot-started-speaking 确认消息。
+
+                服务端 CustomOutputTransport 需要先收到此消息
+                将 _is_bot_speaking 设为 True，后续 bot-stopped-speaking 才能通过守卫。
+                """
+                data = Struct()
+                data.update(
+                    {
+                        "type": "client-message",
+                        "data": {
+                            "t": "bot_started_speaking",
+                            "d": {"tts_id": tts_id},
+                        },
+                        "id": str(uuid.uuid4()),
+                        "label": "rtvi-ai",
+                    }
+                )
+                return voice_agent_transport_pb2.StreamMessage(
+                    type="rtvi_message",
+                    data=data,
+                )
+
+            def _create_bot_stopped_speaking_msg(tts_id=None):
                 """构造 bot-stopped-speaking 确认消息。
 
                 服务端开启了 use_client_bot_stopped_speaking_event，
                 需要客户端在音频播放完成后回传此消息才能触发 turn-done。
+                tts_id 必须与 bot-started-speaking 中的一致，
+                服务端据此从 _step_ids 中移除并递减 _step_text_num。
                 """
                 data = Struct()
                 data.update(
@@ -287,7 +314,7 @@ class GrpcTransport(BaseTransport):
                         "type": "client-message",
                         "data": {
                             "t": "bot_stopped_speaking",
-                            "d": None,
+                            "d": {"tts_id": tts_id} if tts_id else {},
                         },
                         "id": str(uuid.uuid4()),
                         "label": "rtvi-ai",
@@ -326,19 +353,50 @@ class GrpcTransport(BaseTransport):
                         msg_count,
                     )
 
-                    # bot TTS 输出完成 → 回传 bot-stopped-speaking 触发 turn-done
+                    # tts-start → 提取 tts_id + 回传 bot-started-speaking
+                    if (
+                        event_type == "tts-start"
+                        and not self._bot_started_sent
+                    ):
+                        self._bot_started_sent = True
+                        # 从 server-message 内层数据提取 tts_id
+                        inner_data = response.data.fields.get("data")
+                        if inner_data and inner_data.struct_value:
+                            tts_id_field = (
+                                inner_data.struct_value.fields.get("tts_id")
+                            )
+                            if tts_id_field:
+                                self._current_tts_id = (
+                                    tts_id_field.string_value
+                                )
+                        logger.info(
+                            "[Session %d] 检测到 tts-start "
+                            "(tts_id=%s), 回传 bot-started-speaking",
+                            sid,
+                            self._current_tts_id,
+                        )
+                        await self._send_queue.put(
+                            _create_bot_started_speaking_msg(
+                                self._current_tts_id
+                            )
+                        )
+
+                    # bot-tts-stopped → 回传 bot-stopped-speaking（携带 tts_id）
                     if (
                         event_type == "bot-tts-stopped"
                         and not self._bot_stopped_sent
                     ):
                         self._bot_stopped_sent = True
                         logger.info(
-                            "[Session %d] 检测到 bot-tts-stopped, "
-                            "回传 bot-stopped-speaking",
+                            "[Session %d] 检测到 bot-tts-stopped "
+                            "(tts_id=%s), 回传 bot-stopped-speaking",
                             sid,
+                            self._current_tts_id,
                         )
                         await self._send_queue.put(
-                            _create_bot_stopped_speaking_msg()
+                            _create_bot_stopped_speaking_msg(
+                                self._current_tts_id
+                            )
                         )
 
                     # 完成信号 → 记录时间 + 关闭流

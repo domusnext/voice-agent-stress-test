@@ -102,7 +102,7 @@ class DailyTransport(BaseTransport):
             resp = http_client.post(
                 f"{self.server_url}/rtvi/start",
                 headers=headers,
-                json={"source": "stress_test"},
+                json={"source": "web"},
             )
             resp.raise_for_status()
             data = resp.json()["data"]

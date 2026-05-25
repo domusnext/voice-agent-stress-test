@@ -48,7 +48,7 @@ METRIC_QUERIES = {
         "label": "LLM TTFT",
         "expression": (
             "filter msg like /event=llm_ttft/\n"
-            "| parse msg /ttft_ms=(?<ttft>[\\d.]+)/\n"
+            "| parse msg /ttfb_ms=(?<ttft>[\\d.]+)/\n"
             "| filter ttft > 0\n"
             "| stats pct(ttft, 50) as p50, pct(ttft, 90) as p90,"
             " pct(ttft, 99) as p99, avg(ttft) as avg"
