@@ -290,7 +290,7 @@ class GrpcTransport(BaseTransport):
                 - StreamMessage: 直接发送（如 bot-stopped-speaking）
                 - None: 结束迭代器，关闭客户端发送流
                 """
-                self._connected.set()
+                # 不在此处 set _connected，等待服务端 bot-ready/inited 事件
                 logger.info("[Session %d] request_iter started", sid)
                 while True:
                     item = await self._send_queue.get()
@@ -397,6 +397,15 @@ class GrpcTransport(BaseTransport):
                         event_type,
                         msg_count,
                     )
+
+                    # bot-ready / inited → 服务端 pipeline 就绪，允许发送音频
+                    if event_type in ("bot-ready", "inited"):
+                        self._connected.set()
+                        logger.info(
+                            "[Session %d] 服务端就绪 (%s)，开始发送音频",
+                            sid,
+                            event_type,
+                        )
 
                     # tts-start → 记录段起始偏移
                     if event_type == "tts-start":

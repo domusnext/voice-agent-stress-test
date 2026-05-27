@@ -8,9 +8,11 @@ server:
 
 # ---- gRPC 配置（gRPC 模式）----
 grpc:
-  host: "localhost:8085"                # gRPC server 地址
+  # host: "localhost:8085"                # gRPC server 地址
   #host: "speed.heynori.com:443"   # 远程测试
-  tls: false                            # 远程 TLS 连接设为 true，本地测试设为 false
+  host: "speed.smart-domi.app:443"   # 远程测试
+  tls: true                            # 远程 TLS 连接设为 true，本地测试设为 false
+  #tls: false
   device_id: "test1"       # 可选，默认自动生成
   audio_encoding: "pcm"                 # "pcm" | "opus"
 
@@ -33,13 +35,13 @@ test:
 levels:
   - name: "baseline"
     concurrency: 1
-    duration_secs: 120
+    duration_secs: 60
   - name: "low"
     concurrency: 13
     duration_secs: 300
   - name: "medium"
-    concurrency: 30
-    duration_secs: 300
+    concurrency: 20
+    duration_secs: 36000
   - name: "high"
     concurrency: 50
     duration_secs: 300
