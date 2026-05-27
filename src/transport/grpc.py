@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Optional
 
 import grpc
@@ -16,6 +17,20 @@ logger = logging.getLogger(__name__)
 
 # 标记会话结束的 RTVI 事件类型集合
 _COMPLETION_TYPES = {"turn-done", "conversation-end", "will-disconnect"}
+
+# 音频参数常量
+_BYTES_PER_SAMPLE = 2  # 16-bit mono
+
+
+@dataclass
+class TtsSegment:
+    """跟踪单个 TTS 段的播放确认状态。"""
+
+    tts_id: str
+    start_offset_sec: float  # 收到 tts-start 时的 received_audio_duration
+    end_offset_sec: Optional[float] = None  # 收到 tts-end 时的 received_audio_duration
+    started_at_client: bool = False
+    stopped_at_client: bool = False
 
 
 def _extract_rtvi_type(data_struct) -> Optional[str]:
@@ -45,6 +60,19 @@ def _extract_rtvi_type(data_struct) -> Optional[str]:
     return type_str
 
 
+def _extract_tts_id_from_response(response) -> Optional[str]:
+    """从 server-message 的内层 data 中提取 tts_id。
+
+    消息结构: {"type": "server-message", "data": {"type": "tts-start", "tts_id": "xxx"}}
+    """
+    inner_data = response.data.fields.get("data")
+    if inner_data and inner_data.struct_value:
+        tts_id_field = inner_data.struct_value.fields.get("tts_id")
+        if tts_id_field:
+            return tts_id_field.string_value
+    return None
+
+
 def _struct_to_dict(struct) -> dict:
     """将 protobuf Struct 简单转为 dict 用于日志输出。"""
     from google.protobuf.json_format import MessageToDict
@@ -63,10 +91,14 @@ class GrpcTransport(BaseTransport):
     1. 建立 gRPC 双向流连接
     2. 通过流发送音频帧（20ms PCM）
     3. 从流接收 bot 回复：
-       - type="audio" → 检测 TTFA（首帧音频时间点）
+       - type="audio" → 累计接收音频时长 + 检测 TTFA
        - type="rtvi_message" → 解析生命周期事件
-       - bot-tts-stopped → 回传 bot-stopped-speaking 触发 turn-done
-       - turn-done → 标记 E2E 终点，关闭流
+       - tts-start → 记录段起始偏移
+       - tts-end → 记录段结束偏移
+    4. 模拟播放进度（20ms 步进）：
+       - 播放到达 start_offset → 发送 bot_started_speaking
+       - 播放到达 end_offset → 发送 bot_stopped_speaking
+    5. 服务端收到确认后触发 turn-done/conversation-end → 标记 E2E 终点
     """
 
     def __init__(
@@ -113,9 +145,12 @@ class GrpcTransport(BaseTransport):
         self._first_audio_at: Optional[float] = None
         self._conversation_end_at: Optional[float] = None
         self._error: Optional[str] = None
-        self._bot_stopped_sent = False
-        self._bot_started_sent = False
-        self._current_tts_id: Optional[str] = None
+
+        # TTS 播放模拟状态
+        self._tts_segments: list[TtsSegment] = []
+        self._received_audio_duration_sec: float = 0.0
+        self._playback_done = threading.Event()
+        self._playback_task: Optional[asyncio.Task] = None
 
     def connect(self) -> None:
         t0 = time.perf_counter()
@@ -179,6 +214,7 @@ class GrpcTransport(BaseTransport):
         return self.result
 
     def close(self) -> None:
+        self._playback_done.set()
         self._conversation_end.set()
         if self._loop and self._loop.is_running():
             # 向 send_queue 发送 None 让 request_iter 正常退出
@@ -328,6 +364,11 @@ class GrpcTransport(BaseTransport):
             logger.info("[Session %d] 建立 gRPC 双向流...", sid)
             stream = stub.Stream(request_iter(), metadata=metadata)
 
+            # 启动播放模拟 task
+            self._playback_task = asyncio.ensure_future(
+                self._simulate_playback(sid, _create_bot_started_speaking_msg, _create_bot_stopped_speaking_msg)
+            )
+
             msg_count = 0
             audio_count = 0
             async for response in stream:
@@ -336,6 +377,10 @@ class GrpcTransport(BaseTransport):
 
                 if response.type == "audio" and len(response.raw) > 0:
                     audio_count += 1
+                    # 累计接收到的音频时长
+                    self._received_audio_duration_sec += (
+                        len(response.raw) / (self._sample_rate * _BYTES_PER_SAMPLE)
+                    )
                     if self._first_audio_at is None:
                         self._first_audio_at = now
                         logger.info(
@@ -353,56 +398,43 @@ class GrpcTransport(BaseTransport):
                         msg_count,
                     )
 
-                    # tts-start → 提取 tts_id + 回传 bot-started-speaking
-                    if (
-                        event_type == "tts-start"
-                        and not self._bot_started_sent
-                    ):
-                        self._bot_started_sent = True
-                        # 从 server-message 内层数据提取 tts_id
-                        inner_data = response.data.fields.get("data")
-                        if inner_data and inner_data.struct_value:
-                            tts_id_field = (
-                                inner_data.struct_value.fields.get("tts_id")
-                            )
-                            if tts_id_field:
-                                self._current_tts_id = (
-                                    tts_id_field.string_value
+                    # tts-start → 记录段起始偏移
+                    if event_type == "tts-start":
+                        tts_id = _extract_tts_id_from_response(response)
+                        if tts_id:
+                            self._tts_segments.append(
+                                TtsSegment(
+                                    tts_id=tts_id,
+                                    start_offset_sec=self._received_audio_duration_sec,
                                 )
-                        logger.info(
-                            "[Session %d] 检测到 tts-start "
-                            "(tts_id=%s), 回传 bot-started-speaking",
-                            sid,
-                            self._current_tts_id,
-                        )
-                        await self._send_queue.put(
-                            _create_bot_started_speaking_msg(
-                                self._current_tts_id
                             )
-                        )
+                            logger.info(
+                                "[Session %d] tts-start (tts_id=%s, offset=%.3fs)",
+                                sid,
+                                tts_id,
+                                self._received_audio_duration_sec,
+                            )
 
-                    # bot-tts-stopped → 回传 bot-stopped-speaking（携带 tts_id）
-                    if (
-                        event_type == "bot-tts-stopped"
-                        and not self._bot_stopped_sent
-                    ):
-                        self._bot_stopped_sent = True
-                        logger.info(
-                            "[Session %d] 检测到 bot-tts-stopped "
-                            "(tts_id=%s), 回传 bot-stopped-speaking",
-                            sid,
-                            self._current_tts_id,
-                        )
-                        await self._send_queue.put(
-                            _create_bot_stopped_speaking_msg(
-                                self._current_tts_id
-                            )
-                        )
+                    # tts-end → 记录段结束偏移
+                    elif event_type == "tts-end":
+                        tts_id = _extract_tts_id_from_response(response)
+                        if tts_id:
+                            for seg in reversed(self._tts_segments):
+                                if seg.tts_id == tts_id and seg.end_offset_sec is None:
+                                    seg.end_offset_sec = self._received_audio_duration_sec
+                                    logger.info(
+                                        "[Session %d] tts-end (tts_id=%s, offset=%.3fs)",
+                                        sid,
+                                        tts_id,
+                                        self._received_audio_duration_sec,
+                                    )
+                                    break
 
                     # 完成信号 → 记录时间 + 关闭流
                     if event_type in _COMPLETION_TYPES:
                         self._conversation_end_at = now
                         self._conversation_end.set()
+                        self._playback_done.set()
                         logger.info(
                             "[Session %d] 检测到完成信号: %s", sid, event_type
                         )
@@ -415,6 +447,15 @@ class GrpcTransport(BaseTransport):
                         sid,
                         response.type,
                     )
+
+            # 停止播放模拟
+            self._playback_done.set()
+            if self._playback_task and not self._playback_task.done():
+                self._playback_task.cancel()
+                try:
+                    await self._playback_task
+                except asyncio.CancelledError:
+                    pass
 
             logger.info(
                 "[Session %d] gRPC 流结束, 共收到 %d 条消息 (音频帧 %d)",
@@ -435,12 +476,69 @@ class GrpcTransport(BaseTransport):
         except grpc.aio.AioRpcError as e:
             self._error = f"gRPC 错误: {e.code()} - {e.details()}"
             logger.error("[Session %d] %s", sid, self._error)
+            self._playback_done.set()
             self._conversation_end.set()
         except Exception as e:
             self._error = str(e)
             logger.error(
                 "[Session %d] 异常: %s", sid, self._error, exc_info=True
             )
+            self._playback_done.set()
             self._conversation_end.set()
         finally:
             await channel.close()
+
+    async def _simulate_playback(self, sid, _create_bot_started_speaking_msg, _create_bot_stopped_speaking_msg):
+        """模拟音频播放进度，基于播放偏移发送 bot_started/stopped_speaking 确认。
+
+        按实时速率（20ms 步进）推进 played_duration，当播放进度到达
+        某个 TTS 段的 start/end offset 时发送对应确认消息。
+        """
+        played_duration_sec = 0.0
+        step_sec = 0.02  # 20ms 步进，与音频帧时长一致
+
+        while not self._playback_done.is_set():
+            await asyncio.sleep(step_sec)
+            played_duration_sec += step_sec
+
+            for seg in self._tts_segments:
+                if seg.stopped_at_client:
+                    continue
+
+                # 播放进度到达段起始 → 发送 bot_started_speaking
+                if not seg.started_at_client and played_duration_sec >= seg.start_offset_sec:
+                    seg.started_at_client = True
+                    await self._send_queue.put(
+                        _create_bot_started_speaking_msg(seg.tts_id)
+                    )
+                    logger.info(
+                        "[Session %d] 模拟播放: bot_started_speaking (tts_id=%s, played=%.3fs)",
+                        sid,
+                        seg.tts_id,
+                        played_duration_sec,
+                    )
+
+                # 播放进度到达段结束 → 发送 bot_stopped_speaking
+                if (
+                    seg.end_offset_sec is not None
+                    and not seg.stopped_at_client
+                    and played_duration_sec >= seg.end_offset_sec
+                ):
+                    if not seg.started_at_client:
+                        seg.started_at_client = True
+                        await self._send_queue.put(
+                            _create_bot_started_speaking_msg(seg.tts_id)
+                        )
+                    seg.stopped_at_client = True
+                    await self._send_queue.put(
+                        _create_bot_stopped_speaking_msg(seg.tts_id)
+                    )
+                    logger.info(
+                        "[Session %d] 模拟播放: bot_stopped_speaking (tts_id=%s, played=%.3fs)",
+                        sid,
+                        seg.tts_id,
+                        played_duration_sec,
+                    )
+
+            # 清理已完成的段
+            self._tts_segments = [s for s in self._tts_segments if not s.stopped_at_client]
