@@ -101,6 +101,8 @@ def run_one_level(
                 "tls": grpc_cfg.get("tls", False),
                 "user_id": auth_cfg.get("user_id", ""),
                 "timezone": auth_cfg.get("timezone", "Asia/Shanghai"),
+                "voice_key": grpc_cfg.get("voice_key", ""),
+                "stt_key": grpc_cfg.get("stt_key", ""),
                 "enable_analyze_frame_rate": "true" if ramp_mode else "false",
             }
 

@@ -133,6 +133,7 @@ class GrpcTransport(BaseTransport):
         timezone: str = "Asia/Shanghai",
         source: str = "web",
         voice_key: str = "",
+        stt_key: str = "",
         follow_up_mode_on: str = "off",
         enable_analyze_frame_rate: str = "false",
     ):
@@ -148,6 +149,7 @@ class GrpcTransport(BaseTransport):
         self._timezone = timezone
         self._source = source
         self._voice_key = voice_key
+        self._stt_key = stt_key
         self._follow_up_mode_on = follow_up_mode_on
         self._enable_analyze_frame_rate = enable_analyze_frame_rate
 
@@ -307,6 +309,7 @@ class GrpcTransport(BaseTransport):
                 ("x-mode", "standard"),
                 ("x-follow-up-mode-on", self._follow_up_mode_on),
                 ("x-voice-key", self._voice_key),
+                ("x-stt-key", self._stt_key),
                 ("x-enable-analyze-frame-rate", self._enable_analyze_frame_rate),
             ]
 

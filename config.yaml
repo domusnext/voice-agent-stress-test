@@ -15,6 +15,8 @@ grpc:
   tls: false
   device_id: "test1"       # 可选，默认自动生成
   audio_encoding: "pcm"                 # "pcm" | "opus"
+  voice_key: ""                         # 可选，TTS 语音选择（空=服务端默认）
+  stt_key: ""                           # 可选，STT 模型选择：nova3 | flux | seed | 空=服务端默认
 
 # ---- 认证（两种模式共用）----
 auth:
@@ -40,7 +42,7 @@ levels:
     concurrency: 13
     duration_secs: 300
   - name: "medium"
-    concurrency: 92
+    concurrency: 20
     duration_secs: 36000
   - name: "high"
     concurrency: 50
