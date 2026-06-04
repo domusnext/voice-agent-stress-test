@@ -4,8 +4,9 @@
 import argparse
 import json
 import os
+import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import boto3
 import yaml
@@ -221,6 +222,248 @@ def collect_metrics(logs_client, log_group: str, start: int, end: int) -> dict:
         print(f"  ✗ {METRIC_QUERIES[key]['label']}: 查询超时")
 
     return collected
+
+
+def load_config(path):
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+# ──────────── 本地日志收集器（复用 METRIC_QUERIES 的规则，不依赖 AWS）────────────
+
+# 与 METRIC_QUERIES 平行的本地规则描述，显式比正则解析 expression 更稳
+LOCAL_METRIC_RULES = {
+    "ttfa": {
+        "event": "event=ttfa",
+        "fields": {"ttfa": r"ttfa_ms=([\d.]+)"},
+        "agg": "pct",
+        "filter_positive": "ttfa",
+    },
+    "e2e": {
+        "event": "event=turn_e2e",
+        "fields": {"e2e": r"e2e_ms=([\d.]+)"},
+        "agg": "pct",
+    },
+    "stt": {
+        "event": "event=stt stt_provider",
+        "fields": {"dur": r"duration_ms=([\d.]+)"},
+        "agg": "pct",
+    },
+    "llm_ttft": {
+        "event": "event=llm_ttft",
+        "fields": {"ttft": r"ttfb_ms=([\d.]+)"},
+        "agg": "pct",
+        "filter_positive": "ttft",
+    },
+    "llm_call": {
+        "event": "event=llm_call",
+        "fields": {"dur": r"duration_ms=([\d.]+)", "s": r"success=(\d)"},
+        "agg": "pct_with_success",
+    },
+    "tts_ttfb": {
+        "event": "event=tts_ttfb",
+        "fields": {"ttfb": r"ttfb_ms=([\d.]+)"},
+        "agg": "pct",
+    },
+    "tts": {
+        "event": "event=tts tts_provider",
+        "fields": {"dur": r"duration_ms=([\d.]+)"},
+        "agg": "pct",
+    },
+    "ttfa_breakdown": {
+        "event": "event=ttfa",
+        "fields": {
+            "stt": r"stt_ms=([\d.]+)",
+            "llm": r"llm_ttft_ms=([\d.]+)",
+            "tts": r"tts_ttfb_ms=([\d.]+)",
+            "ttfa": r"ttfa_ms=([\d.]+)",
+        },
+        "agg": "avg_multi",
+    },
+    "errors": {
+        "event_re": r"event=(stt_error|tts_error)",
+        "agg": "count_by_event",
+    },
+    "sessions": {
+        "event": "event=bot_session",
+        "fields": {"action": r"action=(\w+)"},
+        "agg": "session_count",
+    },
+    "interrupts": {
+        "event": "event=turn_e2e",
+        "fields": {"intr": r"interrupted=(\d)"},
+        "agg": "interrupt_rate",
+    },
+}
+
+# 日志行时间戳格式：2026-06-03 14:29:05.636
+_LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)")
+_LOG_METRIC_MARKER = "[voice metric]:"
+
+
+def _percentile_local(data: list, p: int) -> float:
+    if not data:
+        return 0.0
+    s = sorted(data)
+    k = (len(s) - 1) * p / 100
+    f = int(k)
+    c = min(f + 1, len(s) - 1)
+    return round(s[f] + (s[c] - s[f]) * (k - f), 2)
+
+
+class LocalLogCollector:
+    """
+    解析本地 domi-voice-agent 日志，产出与 collect_metrics() 完全一致的 dict。
+
+    日志行格式（loguru）：
+        2026-06-03 14:29:05.636 | INFO | ... | [voice metric]: event=ttfa ... | trace_id=...
+    时间戳为本地时间（无时区），而 start_iso/end_iso 为 UTC ISO 字符串，需转换后比较。
+    """
+
+    def __init__(self, log_path: str):
+        self.log_path = log_path
+
+    def collect(self, start_iso: str, end_iso: str) -> dict:
+        # UTC → 本地 naive datetime，与日志时间戳同域比较（避免 8h 偏移）
+        start_utc = datetime.fromisoformat(start_iso)
+        end_utc = datetime.fromisoformat(end_iso)
+        start_local = start_utc.astimezone().replace(tzinfo=None)
+        end_local = end_utc.astimezone().replace(tzinfo=None)
+
+        # 按规则收集原始值
+        buckets: dict = {k: {} for k in LOCAL_METRIC_RULES}
+
+        try:
+            with open(self.log_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    m = _LOG_TS_RE.match(line)
+                    if not m:
+                        continue
+                    try:
+                        ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S.%f")
+                    except ValueError:
+                        continue
+                    if ts < start_local or ts > end_local:
+                        continue
+                    if _LOG_METRIC_MARKER not in line:
+                        continue
+
+                    # 提取 [voice metric]: 之后的部分
+                    metric_part = line.split(_LOG_METRIC_MARKER, 1)[1]
+
+                    for key, rule in LOCAL_METRIC_RULES.items():
+                        agg = rule["agg"]
+
+                        if "event_re" in rule:
+                            # errors: count_by_event
+                            em = re.search(rule["event_re"], metric_part)
+                            if em:
+                                etype = em.group(1)
+                                buckets[key].setdefault(etype, 0)
+                                buckets[key][etype] += 1
+                            continue
+
+                        if rule.get("event") not in metric_part:
+                            continue
+
+                        if agg == "session_count":
+                            am = re.search(r"action=(\w+)", metric_part)
+                            if am:
+                                action = am.group(1)
+                                buckets[key].setdefault("started", 0)
+                                buckets[key].setdefault("stopped", 0)
+                                if action == "start":
+                                    buckets[key]["started"] += 1
+                                elif action == "stop":
+                                    buckets[key]["stopped"] += 1
+                            continue
+
+                        # 提取各字段数值
+                        extracted = {}
+                        for fname, pattern in rule["fields"].items():
+                            fm = re.search(pattern, metric_part)
+                            if fm:
+                                try:
+                                    extracted[fname] = float(fm.group(1))
+                                except ValueError:
+                                    pass
+
+                        if not extracted:
+                            continue
+
+                        if agg in ("pct", "pct_with_success"):
+                            primary = list(rule["fields"].keys())[0]
+                            if primary not in extracted:
+                                continue
+                            val = extracted[primary]
+                            # filter_positive：过滤 <= 0 的值
+                            if rule.get("filter_positive") and val <= 0:
+                                continue
+                            buckets[key].setdefault("_vals", []).append(val)
+                            if agg == "pct_with_success" and "s" in extracted:
+                                buckets[key].setdefault("_success", []).append(extracted["s"])
+
+                        elif agg == "avg_multi":
+                            for fname, val in extracted.items():
+                                buckets[key].setdefault(fname, []).append(val)
+
+                        elif agg == "interrupt_rate":
+                            if "intr" in extracted:
+                                buckets[key].setdefault("_vals", []).append(extracted["intr"])
+
+        except FileNotFoundError:
+            print(f"  ! LocalLogCollector: 日志文件不存在: {self.log_path}")
+            return {}
+
+        # 聚合为与 collect_metrics() 一致的结构
+        result = {}
+        for key, rule in LOCAL_METRIC_RULES.items():
+            label = METRIC_QUERIES[key]["label"]
+            agg = rule["agg"]
+            b = buckets[key]
+
+            if agg in ("pct", "pct_with_success"):
+                vals = b.get("_vals", [])
+                if not vals:
+                    result[key] = {"label": label, "data": {}}
+                    continue
+                data = {
+                    "p50": _percentile_local(vals, 50),
+                    "p90": _percentile_local(vals, 90),
+                    "p99": _percentile_local(vals, 99),
+                    "avg": round(sum(vals) / len(vals), 2),
+                    "cnt": len(vals),
+                }
+                if agg == "pct_with_success":
+                    sv = b.get("_success", [])
+                    data["success_rate"] = round(sum(sv) / len(sv) * 100, 2) if sv else 0.0
+                result[key] = {"label": label, "data": data}
+
+            elif agg == "avg_multi":
+                data = {}
+                for fname in rule["fields"]:
+                    vals = b.get(fname, [])
+                    suffix_map = {"stt": "stt_avg", "llm": "llm_avg", "tts": "tts_avg", "ttfa": "ttfa_avg"}
+                    out_key = suffix_map.get(fname, f"{fname}_avg")
+                    data[out_key] = round(sum(vals) / len(vals), 2) if vals else 0.0
+                result[key] = {"label": label, "data": data}
+
+            elif agg == "count_by_event":
+                rows = [{"event_type": etype, "error_count": cnt} for etype, cnt in b.items()]
+                result[key] = {"label": label, "data": rows}
+
+            elif agg == "session_count":
+                result[key] = {"label": label, "data": {"started": b.get("started", 0), "stopped": b.get("stopped", 0)}}
+
+            elif agg == "interrupt_rate":
+                vals = b.get("_vals", [])
+                if vals:
+                    rate = round(sum(vals) / len(vals) * 100, 2)
+                    result[key] = {"label": label, "data": {"interrupt_rate": rate, "total_turns": len(vals)}}
+                else:
+                    result[key] = {"label": label, "data": {}}
+
+        return result
 
 
 def load_config(path):

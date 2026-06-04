@@ -73,6 +73,24 @@ def _extract_tts_id_from_response(response) -> Optional[str]:
     return None
 
 
+def _extract_frame_rate_payload(response) -> Optional[dict]:
+    """从 input-frame-rate 消息提取 payload。
+
+    结构: {"type":"server-message","data":{"type":"input-frame-rate","payload":{...}}}
+    """
+    inner = response.data.fields.get("data")
+    if not (inner and inner.struct_value):
+        return None
+    payload = inner.struct_value.fields.get("payload")
+    if not (payload and payload.struct_value):
+        return None
+    f = payload.struct_value.fields
+    return {
+        "frame_count": f["frame_count"].number_value if "frame_count" in f else 0,
+        "is_poor_connection": f["is_poor_connection"].bool_value if "is_poor_connection" in f else False,
+    }
+
+
 def _struct_to_dict(struct) -> dict:
     """将 protobuf Struct 简单转为 dict 用于日志输出。"""
     from google.protobuf.json_format import MessageToDict
@@ -135,6 +153,13 @@ class GrpcTransport(BaseTransport):
 
         self.result = TransportResult()
 
+        # 帧率累加器（会话级，wait_for_completion 时回填到 result）
+        self._frame_windows: int = 0
+        self._low_fps_windows: int = 0
+        self._poor_conn_windows: int = 0
+        self._fps_samples: list = []
+        self._poor_fps_threshold: int = 40  # 与服务端 _poor_connection_threshold 一致
+
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._send_queue: Optional[asyncio.Queue] = None
@@ -176,6 +201,8 @@ class GrpcTransport(BaseTransport):
         bytes_per_frame = samples_per_frame * 2  # 16-bit mono
         sleep_secs = frame_duration_ms / 1000
 
+        n_frames = 0
+        t_send_start = time.perf_counter()
         for offset in range(0, len(audio_pcm), bytes_per_frame):
             frame = audio_pcm[offset : offset + bytes_per_frame]
             asyncio.run_coroutine_threadsafe(
@@ -183,6 +210,11 @@ class GrpcTransport(BaseTransport):
                 self._loop,
             ).result(timeout=5)
             time.sleep(sleep_secs)
+            n_frames += 1
+
+        elapsed = time.perf_counter() - t_send_start
+        ideal = n_frames * (frame_duration_ms / 1000)
+        self.result.send_pace_ratio = round(elapsed / ideal, 3) if ideal > 0 else 1.0
 
         self._stop_speaking_at = time.perf_counter()
         self._send_done.set()
@@ -210,6 +242,12 @@ class GrpcTransport(BaseTransport):
         if self._first_audio_at is None and self.result.success:
             self.result.success = False
             self.result.error = "未收到 bot 音频回复"
+
+        # 回填帧率辅助信号（send_pace_ratio 已在 send_audio 写入）
+        self.result.frame_windows = self._frame_windows
+        self.result.low_fps_windows = self._low_fps_windows
+        self.result.poor_conn_windows = self._poor_conn_windows
+        self.result.fps_samples = self._fps_samples
 
         return self.result
 
@@ -397,6 +435,19 @@ class GrpcTransport(BaseTransport):
                         event_type,
                         msg_count,
                     )
+
+                    # input-frame-rate → 累计帧率统计（辅助归因信号）
+                    if event_type == "input-frame-rate":
+                        fr = _extract_frame_rate_payload(response)
+                        if fr is not None:
+                            fps = fr["frame_count"]  # 窗口≈1s，帧数≈fps
+                            self._frame_windows += 1
+                            self._fps_samples.append(fps)
+                            if fps < self._poor_fps_threshold:
+                                self._low_fps_windows += 1
+                            if fr["is_poor_connection"]:
+                                self._poor_conn_windows += 1
+                        continue  # 帧率消息不参与 tts/完成信号判断
 
                     # bot-ready / inited → 服务端 pipeline 就绪，允许发送音频
                     if event_type in ("bot-ready", "inited"):

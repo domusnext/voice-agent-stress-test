@@ -19,6 +19,17 @@ class SessionResult:
     success: bool = True
     error: str = ""
 
+    # ── 帧率辅助信号（镜像 TransportResult，跨进程回传）──
+    frame_windows: int = 0
+    low_fps_windows: int = 0
+    poor_conn_windows: int = 0
+    fps_samples: list = None
+    send_pace_ratio: float = 1.0
+
+    def __post_init__(self):
+        if self.fps_samples is None:
+            self.fps_samples = []
+
 
 def load_wav_pcm(filepath: str, target_sr: int = 16000) -> bytes:
     """加载 WAV 文件，返回 16-bit PCM bytes（单声道）"""
@@ -96,6 +107,11 @@ class StressTestSession:
             result.client_e2e_ms = tr.client_e2e_ms
             result.success = tr.success
             result.error = tr.error
+            result.frame_windows = tr.frame_windows
+            result.low_fps_windows = tr.low_fps_windows
+            result.poor_conn_windows = tr.poor_conn_windows
+            result.fps_samples = tr.fps_samples
+            result.send_pace_ratio = tr.send_pace_ratio
 
         except Exception as e:
             result.success = False

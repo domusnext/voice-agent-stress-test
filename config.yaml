@@ -18,7 +18,7 @@ grpc:
 
 # ---- 认证（两种模式共用）----
 auth:
-  token: "Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6Ikd2VE5GamxSVlJBdTRUanAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2xxY3l2YWlpcmJ3YnpudnN2bHd1LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiJmYjQ1OGVhNy0zYzNkLTRlNTAtOTJmZi03ZTJkNGQ2YzRhMjIiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzgwMTQwNTA5LCJpYXQiOjE3Nzk3ODA1MDksImVtYWlsIjoibGloYWljaGVuZzE4QGdtYWlsLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZ29vZ2xlIiwicHJvdmlkZXJzIjpbImdvb2dsZSJdfSwidXNlcl9tZXRhZGF0YSI6eyJhdmF0YXJfdXJsIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jS0dMZW9OaVo2S2dVMWFMdFJyYVdlS3cyUFhBSkpyakYtdTV3LTRYQURwTW5nQ05nPXM5Ni1jIiwiZW1haWwiOiJsaWhhaWNoZW5nMThAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZ1bGxfbmFtZSI6Iuadjua1t-aIkCIsImlzcyI6Imh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbSIsIm5hbWUiOiLmnY7mtbfmiJAiLCJwaG9uZV92ZXJpZmllZCI6ZmFsc2UsInBpY3R1cmUiOiJodHRwczovL2xoMy5nb29nbGV1c2VyY29udGVudC5jb20vYS9BQ2c4b2NLR0xlb05pWjZLZ1UxYUx0UnJhV2VLdzJQWEFKSnJqRi11NXctNFhBRHBNbmdDTmc9czk2LWMiLCJwcm92aWRlcl9pZCI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInNvdXJjZSI6IndlYiIsInN1YiI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInRpbWV6b25lIjoiQXNpYS9TaGFuZ2hhaSJ9LCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImFhbCI6ImFhbDEiLCJhbXIiOlt7Im1ldGhvZCI6Im9hdXRoIiwidGltZXN0YW1wIjoxNzc5MzY4MzkwfV0sInNlc3Npb25faWQiOiIwYThlNzJlZS1kZmNmLTQ5MTYtYWVhMC04NDdhN2I0OThiMjEiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.tDVzIPT4whFMbsEscU_SDROomFj8qyf4rDCHlIl7zbY"
+  token: "Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6Ikd2VE5GamxSVlJBdTRUanAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2xxY3l2YWlpcmJ3YnpudnN2bHd1LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiJmYjQ1OGVhNy0zYzNkLTRlNTAtOTJmZi03ZTJkNGQ2YzRhMjIiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzgwNzQ0NjUyLCJpYXQiOjE3ODAzODQ2NTIsImVtYWlsIjoibGloYWljaGVuZzE4QGdtYWlsLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZ29vZ2xlIiwicHJvdmlkZXJzIjpbImdvb2dsZSJdfSwidXNlcl9tZXRhZGF0YSI6eyJhdmF0YXJfdXJsIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jS0dMZW9OaVo2S2dVMWFMdFJyYVdlS3cyUFhBSkpyakYtdTV3LTRYQURwTW5nQ05nPXM5Ni1jIiwiZW1haWwiOiJsaWhhaWNoZW5nMThAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZ1bGxfbmFtZSI6Iuadjua1t-aIkCIsImlzcyI6Imh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbSIsIm5hbWUiOiLmnY7mtbfmiJAiLCJwaG9uZV92ZXJpZmllZCI6ZmFsc2UsInBpY3R1cmUiOiJodHRwczovL2xoMy5nb29nbGV1c2VyY29udGVudC5jb20vYS9BQ2c4b2NLR0xlb05pWjZLZ1UxYUx0UnJhV2VLdzJQWEFKSnJqRi11NXctNFhBRHBNbmdDTmc9czk2LWMiLCJwcm92aWRlcl9pZCI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInNvdXJjZSI6IndlYiIsInN1YiI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInRpbWV6b25lIjoiQXNpYS9TaGFuZ2hhaSJ9LCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImFhbCI6ImFhbDEiLCJhbXIiOlt7Im1ldGhvZCI6Im9hdXRoIiwidGltZXN0YW1wIjoxNzgwMzg0NjUyfV0sInNlc3Npb25faWQiOiI2MWQyYjcwYS04MGJhLTQ0NDUtYjI3ZC04YWZiMWFmMjMwODQiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.buP7UeMVudFk2PS1y1Qw4DScIEQrmlLpdDoulMaSocg"
   family_id: "6adf918a-dc5f-4094-822b-8aef5570d230"          # 测试 family UUID（必填）
   user_id: "be5682c7-5d18-40f3-86ca-9999bd628e4f"            # 测试 user UUID（必填）
   timezone: "Asia/Shanghai"
@@ -40,7 +40,7 @@ levels:
     concurrency: 13
     duration_secs: 300
   - name: "medium"
-    concurrency: 20
+    concurrency: 92
     duration_secs: 36000
   - name: "high"
     concurrency: 50
@@ -54,6 +54,47 @@ cloudwatch:
   region: "us-east-1"                          # AWS Region
   log_group: "/ecs/domus/prod/voice-agent"      # CloudWatch Log Group 名称
   profile: "domus-prod"                         # 可选：AWS CLI profile 名称，空则使用默认凭证链
+
+# ---- 自动递增并发度方案 ----
+ramp:
+  enabled: false          # true 时 run.py 走 ramp 模式（也可用 --ramp 命令行开启）
+  start: 1                # 起始并发度（基准并发度）
+  step: 2                 # 每级线性递增的并发度（固定步长）
+  max: 30                 # 并发度上限（安全阀，到顶即停）
+  hold_secs: 300          # 每个递增级别的维持时长
+  cooldown_secs: 30       # 级别间冷却
+
+  # ── 基准建立（阶段一，concurrency=1 多测几次、每次更久）──
+  baseline_repeats: 3         # 并发度1重复轮数，汇总所有轮样本得稳健基准
+  baseline_hold_secs: 600     # 基准每轮时长
+
+  # ── 服务端指标来源 ──
+  server_metrics:
+    source: "local_log"       # cloudwatch | local_log
+    local_log_path: "/Users/lihaicheng/duomi_workspace/domi-voice-agent/logs/app.log"
+
+  judge:
+    # ── 主判据 A：响应延迟（与「基准带」比较）──
+    band_rel_margin: 0.20       # 相对裕度
+    band_mad_k: 3.0             # MAD 倍数
+    degrade_band_ratio: 1.0     # 越过 band_high × 此值 → 预警
+    fail_band_ratio: 1.5        # 越过 band_high × 此值 → 超载
+
+    # ── 主判据 B：会话成功率 / 错误 / 会话丢失 ──
+    session_success_fail: 0.90
+    session_success_degrade: 0.98
+    error_count_fail: 1
+    session_lost_ratio_fail: 0.05
+
+    # ── 辅助信号：帧率（仅归因，不单独定超载）──
+    poor_frame_rate_threshold: 40
+    low_fps_ratio_attn: 0.10
+    poor_conn_ratio_attn: 0.05
+    poor_conn_count_attn: 0
+    send_pace_ratio_unreliable: 1.2
+
+    degrade_streak_fail: 2      # 连续 N 个"预警"视为"超载"
+    min_windows: 5
 
 # ---- CloudWatch 指标采集 ----
 cloudwatch_dev:

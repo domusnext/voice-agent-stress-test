@@ -15,6 +15,18 @@ class TransportResult:
     success: bool = True
     error: str = ""
 
+    # ── 帧率辅助信号（仅 gRPC 且开启 enable_analyze_frame_rate 时有值）──
+    frame_windows: int = 0          # 收到的帧率窗口总数
+    low_fps_windows: int = 0        # 其中 fps < 阈值(40) 的窗口数
+    poor_conn_windows: int = 0      # 其中 is_poor_connection=true 的窗口数
+    fps_samples: Optional[list] = None  # 每窗口 fps 列表
+    # ── 发送侧自检（可信度护栏）──
+    send_pace_ratio: float = 1.0    # 实际发送耗时 / 理论耗时(帧数×20ms)
+
+    def __post_init__(self):
+        if self.fps_samples is None:
+            self.fps_samples = []
+
 
 class BaseTransport(ABC):
     """
