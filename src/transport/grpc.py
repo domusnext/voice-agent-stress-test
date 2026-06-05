@@ -136,6 +136,7 @@ class GrpcTransport(BaseTransport):
         stt_key: str = "",
         follow_up_mode_on: str = "off",
         enable_analyze_frame_rate: str = "false",
+        enable_agent: str = "true",
     ):
         self.session_id = session_id
         self._host = grpc_host
@@ -152,6 +153,7 @@ class GrpcTransport(BaseTransport):
         self._stt_key = stt_key
         self._follow_up_mode_on = follow_up_mode_on
         self._enable_analyze_frame_rate = enable_analyze_frame_rate
+        self._enable_agent = enable_agent
 
         self.result = TransportResult()
 
@@ -311,6 +313,7 @@ class GrpcTransport(BaseTransport):
                 ("x-voice-key", self._voice_key),
                 ("x-stt-key", self._stt_key),
                 ("x-enable-analyze-frame-rate", self._enable_analyze_frame_rate),
+                ("x-enable-agent", self._enable_agent),
             ]
 
             stub = voice_agent_transport_pb2_grpc.VoiceAgentTransportStub(channel)

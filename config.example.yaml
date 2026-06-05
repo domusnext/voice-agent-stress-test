@@ -14,7 +14,7 @@ grpc:
   device_id: "stress-test-device"       # 可选，默认自动生成
   audio_encoding: "pcm"                 # "pcm" | "opus"
   voice_key: ""                         # 可选，TTS 语音选择（空=服务端默认）
-  stt_key: ""                           # 可选，STT 模型选择：nova3 | flux | seed | 空=服务端默认
+  stt_key: "flux"                           # 可选，STT 模型选择：nova3 | flux | seed | 空=服务端默认
 
 # ---- 认证（两种模式共用）----
 auth:

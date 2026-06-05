@@ -9,18 +9,19 @@ server:
 # ---- gRPC 配置（gRPC 模式）----
 grpc:
   host: "localhost:8085"                # gRPC server 地址
-  #host: "speed.heynori.com:443"   # 远程测试
-  #host: "speed.smart-domi.app:443"   # 远程测试
+  #host: "speed.heynori.com:443"   # 远程测试 prod
+  #host: "speed.smart-domi.app:443"   # 远程测试 dev
   #tls: true                            # 远程 TLS 连接设为 true，本地测试设为 false
   tls: false
   device_id: "test1"       # 可选，默认自动生成
   audio_encoding: "pcm"                 # "pcm" | "opus"
   voice_key: ""                         # 可选，TTS 语音选择（空=服务端默认）
-  stt_key: ""                           # 可选，STT 模型选择：nova3 | flux | seed | 空=服务端默认
+  stt_key: "flux"                           # 可选，STT 模型选择：nova3 | flux | seed | 空=服务端默认
+  enable_agent: "false"                 # "true" | "false"，false=全链路mock（STT/LLM/TTS均不调外部服务）
 
 # ---- 认证（两种模式共用）----
 auth:
-  token: "Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6Ikd2VE5GamxSVlJBdTRUanAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2xxY3l2YWlpcmJ3YnpudnN2bHd1LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiJmYjQ1OGVhNy0zYzNkLTRlNTAtOTJmZi03ZTJkNGQ2YzRhMjIiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzgwNzQ0NjUyLCJpYXQiOjE3ODAzODQ2NTIsImVtYWlsIjoibGloYWljaGVuZzE4QGdtYWlsLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZ29vZ2xlIiwicHJvdmlkZXJzIjpbImdvb2dsZSJdfSwidXNlcl9tZXRhZGF0YSI6eyJhdmF0YXJfdXJsIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jS0dMZW9OaVo2S2dVMWFMdFJyYVdlS3cyUFhBSkpyakYtdTV3LTRYQURwTW5nQ05nPXM5Ni1jIiwiZW1haWwiOiJsaWhhaWNoZW5nMThAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZ1bGxfbmFtZSI6Iuadjua1t-aIkCIsImlzcyI6Imh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbSIsIm5hbWUiOiLmnY7mtbfmiJAiLCJwaG9uZV92ZXJpZmllZCI6ZmFsc2UsInBpY3R1cmUiOiJodHRwczovL2xoMy5nb29nbGV1c2VyY29udGVudC5jb20vYS9BQ2c4b2NLR0xlb05pWjZLZ1UxYUx0UnJhV2VLdzJQWEFKSnJqRi11NXctNFhBRHBNbmdDTmc9czk2LWMiLCJwcm92aWRlcl9pZCI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInNvdXJjZSI6IndlYiIsInN1YiI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInRpbWV6b25lIjoiQXNpYS9TaGFuZ2hhaSJ9LCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImFhbCI6ImFhbDEiLCJhbXIiOlt7Im1ldGhvZCI6Im9hdXRoIiwidGltZXN0YW1wIjoxNzgwMzg0NjUyfV0sInNlc3Npb25faWQiOiI2MWQyYjcwYS04MGJhLTQ0NDUtYjI3ZC04YWZiMWFmMjMwODQiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.buP7UeMVudFk2PS1y1Qw4DScIEQrmlLpdDoulMaSocg"
+  token: "Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6Ikd2VE5GamxSVlJBdTRUanAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2xxY3l2YWlpcmJ3YnpudnN2bHd1LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiJmYjQ1OGVhNy0zYzNkLTRlNTAtOTJmZi03ZTJkNGQ2YzRhMjIiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzgwNjQ0ODU4LCJpYXQiOjE3ODAyODQ4NTgsImVtYWlsIjoibGloYWljaGVuZzE4QGdtYWlsLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZ29vZ2xlIiwicHJvdmlkZXJzIjpbImdvb2dsZSJdfSwidXNlcl9tZXRhZGF0YSI6eyJhdmF0YXJfdXJsIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jS0dMZW9OaVo2S2dVMWFMdFJyYVdlS3cyUFhBSkpyakYtdTV3LTRYQURwTW5nQ05nPXM5Ni1jIiwiZW1haWwiOiJsaWhhaWNoZW5nMThAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZ1bGxfbmFtZSI6Iuadjua1t-aIkCIsImlzcyI6Imh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbSIsIm5hbWUiOiLmnY7mtbfmiJAiLCJwaG9uZV92ZXJpZmllZCI6ZmFsc2UsInBpY3R1cmUiOiJodHRwczovL2xoMy5nb29nbGV1c2VyY29udGVudC5jb20vYS9BQ2c4b2NLR0xlb05pWjZLZ1UxYUx0UnJhV2VLdzJQWEFKSnJqRi11NXctNFhBRHBNbmdDTmc9czk2LWMiLCJwcm92aWRlcl9pZCI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInNvdXJjZSI6IndlYiIsInN1YiI6IjExMzMwMDk5NDkyMjkxNDc5NzYwNCIsInRpbWV6b25lIjoiQXNpYS9TaGFuZ2hhaSJ9LCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImFhbCI6ImFhbDEiLCJhbXIiOlt7Im1ldGhvZCI6Im9hdXRoIiwidGltZXN0YW1wIjoxNzc5MzY4MzkwfV0sInNlc3Npb25faWQiOiIwYThlNzJlZS1kZmNmLTQ5MTYtYWVhMC04NDdhN2I0OThiMjEiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.pi9tXPUd12124uwA-LzQam-LTq0ptt2C0mmpi_OfUmY"
   family_id: "6adf918a-dc5f-4094-822b-8aef5570d230"          # 测试 family UUID（必填）
   user_id: "be5682c7-5d18-40f3-86ca-9999bd628e4f"            # 测试 user UUID（必填）
   timezone: "Asia/Shanghai"
@@ -42,7 +43,7 @@ levels:
     concurrency: 13
     duration_secs: 300
   - name: "medium"
-    concurrency: 20
+    concurrency: 80
     duration_secs: 36000
   - name: "high"
     concurrency: 50

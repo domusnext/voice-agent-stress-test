@@ -10,7 +10,7 @@ import tempfile
 import edge_tts
 
 QUESTIONS = [
-    ("question_greeting.wav", "Hey Nori, what events do I have for the weekend?"),
+    ("question_greeting.wav", "Hey, What's the weather in Beijing?"),
     # ("question_greeting.wav", "Hey, um, so I was just thinking about this earlier today when I was talking to my friend Sarah—you know, the one who lives in Boston and works at that tech startup? Anyway, we were having coffee and she mentioned something about AI assistants, which reminded me that I've been meaning to ask someone about this. So, like, I know this might sound like a basic question, and honestly I'm not even sure if this is the right way to phrase it, but I've always been curious and never really got a straight answer... so, who are you?"),
 ]
 

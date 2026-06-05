@@ -104,6 +104,7 @@ def run_one_level(
                 "voice_key": grpc_cfg.get("voice_key", ""),
                 "stt_key": grpc_cfg.get("stt_key", ""),
                 "enable_analyze_frame_rate": "true" if ramp_mode else "false",
+                "enable_agent": grpc_cfg.get("enable_agent", "true"),
             }
 
         return base
