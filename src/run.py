@@ -128,8 +128,10 @@ def run_one_level(
     test_start_utc = datetime.now(timezone.utc).isoformat()
     deadline = time.monotonic() + duration_secs
 
-    # max_workers 限制：避免进程过多导致系统不稳定
-    max_workers = min(concurrency, os.cpu_count() * 4 or 32)
+    # max_workers：默认放开到 concurrency，避免压测机进程池人为压低并发。
+    # 注意：子进程数 > CPU 核数时会 CPU 过订（oversubscription），
+    # 若发现 send_pace_ratio 偏高/帧率下降，说明瓶颈在压测机而非服务端。
+    max_workers = concurrency
 
     ramp_delay = ramp_up_secs / max(concurrency, 1)
 

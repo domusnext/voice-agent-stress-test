@@ -107,7 +107,7 @@ def make_metadata(config: Optional[dict], stream_id: int, mode: str = "standard"
             ("x-family-id", auth_cfg.get("family_id", "test-family")),
             ("x-user-id", auth_cfg.get("user_id", "")),
             ("x-timezone", auth_cfg.get("timezone", "Asia/Shanghai")),
-            ("x-source", "limit_test"),
+            ("x-source", "web"),
             ("x-conversation-id", str(uuid.uuid4())),
             ("x-audio-encoding", grpc_cfg.get("audio_encoding", "pcm")),
             ("x-mode", mode),
@@ -125,7 +125,7 @@ def make_metadata(config: Optional[dict], stream_id: int, mode: str = "standard"
             ("x-family-id", "test-family-id"),
             ("x-user-id", "test-user-id"),
             ("x-timezone", "Asia/Shanghai"),
-            ("x-source", "limit_test"),
+            ("x-source", "web"),
             ("x-conversation-id", str(uuid.uuid4())),
             ("x-audio-encoding", "pcm"),
             ("x-mode", mode),
@@ -197,6 +197,8 @@ async def hold_stream(
         stream = stub.Stream(request_iter(), metadata=metadata)
 
         inited_event = asyncio.Event()
+        inited_real = False  # 仅在真正收到 inited/bot-ready 时置 True
+        recv_error: dict = {}  # 捕获 recv_loop 中的 gRPC 错误
         frames_recv = 0
         max_send_stall_ms = 0.0
         max_recv_lag_ms = 0.0
@@ -204,7 +206,7 @@ async def hold_stream(
         send_timestamps: list = []  # list of (frame_seq, sent_at)
 
         async def recv_loop():
-            nonlocal frames_recv, max_recv_lag_ms
+            nonlocal frames_recv, max_recv_lag_ms, inited_real
             try:
                 async for response in stream:
                     if response.type == "rtvi_message":
@@ -217,8 +219,10 @@ async def hold_stream(
                                 if inner and inner.struct_value:
                                     inner_type = inner.struct_value.fields.get("type")
                                     if inner_type and inner_type.string_value in ("inited", "bot-ready"):
+                                        inited_real = True
                                         inited_event.set()
                             elif type_str in ("inited", "bot-ready"):
+                                inited_real = True
                                 inited_event.set()
                     elif response.type == "audio" and echo_load:
                         frames_recv += 1
@@ -231,8 +235,15 @@ async def hold_stream(
                             lag_ms = max(0.0, rtt_ms - FRAME_MS * 1000)
                             if lag_ms > max_recv_lag_ms:
                                 max_recv_lag_ms = lag_ms
-            except grpc.aio.AioRpcError:
-                pass
+            except grpc.aio.AioRpcError as e:
+                # 连接在 inited 之前/期间被服务端拒绝或握手超时，记录真实错误码
+                recv_error["code"] = str(e.code())
+                recv_error["detail"] = e.details() or ""
+                recv_error["rejected"] = e.code() in (
+                    grpc.StatusCode.RESOURCE_EXHAUSTED,
+                    grpc.StatusCode.UNAVAILABLE,
+                    grpc.StatusCode.PERMISSION_DENIED,
+                )
             except asyncio.CancelledError:
                 pass
             finally:
@@ -246,6 +257,17 @@ async def hold_stream(
             except asyncio.TimeoutError:
                 result.error_code = "INITED_TIMEOUT"
                 result.error_detail = f"等待 inited 超时 ({connect_timeout}s)"
+                recv_task.cancel()
+                await send_q.put(None)
+                await result_queue.put(result)
+                return
+
+            # inited_event 也可能由 recv_loop 的 finally（连接出错）触发，
+            # 必须用 inited_real 区分“真 inited”与“连接失败提前唤醒”，否则会误报成功。
+            if not inited_real:
+                result.error_code = recv_error.get("code", "STREAM_CLOSED_BEFORE_INITED")
+                result.error_detail = recv_error.get("detail", "连接在收到 inited 前关闭")
+                result.rejected = recv_error.get("rejected", False)
                 recv_task.cancel()
                 await send_q.put(None)
                 await result_queue.put(result)
@@ -435,6 +457,83 @@ async def run_test(
     return summary
 
 
+async def run_ramped_test(
+    host: str,
+    max_streams: int,
+    ramp_rate: float,
+    connect_timeout: float,
+    hold_secs: float,
+    config: Optional[dict],
+    wait_inited: bool,
+) -> TestSummary:
+    """
+    恒速 ramp 模式：每 (1/ramp_rate) 秒起一条新流，建立后不断开持续保活。
+
+    与 batch 模式的区别：不等前一条 inited 就按墙钟节奏起下一条，
+    用于区分 create_pipeline() 的 init-time 阻塞 vs 常驻 pipeline 的 runtime 负载。
+    - 拉开到达间隔后仍能建满 max_streams → init 阻塞是瓶颈
+    - 仍卡在 ~41 → 是 N 个常驻 pipeline 的 runtime 累积负载
+    """
+    summary = TestSummary(
+        host=host,
+        max_streams_attempted=max_streams,
+        streams_succeeded=0,
+        streams_failed=0,
+    )
+    interval = 1.0 / ramp_rate
+    hold_event = asyncio.Event()
+    result_queue: asyncio.Queue = asyncio.Queue()
+    stream_tasks = []
+
+    print(f"\n{'='*60}")
+    print(f"目标: {host}   [恒速 ramp 模式]")
+    print(f"计划建立流数: {max_streams}   速率: {ramp_rate}/s（间隔 {interval*1000:.0f}ms）")
+    print(f"保持时长: {hold_secs}s   等待inited: {wait_inited}   全程不断开")
+    print(f"{'='*60}")
+
+    # 逐个按固定间隔起流，不等 inited
+    for sid in range(max_streams):
+        task = asyncio.create_task(
+            hold_stream(
+                stream_id=sid,
+                host=host,
+                config=config,
+                connect_timeout=connect_timeout,
+                hold_event=hold_event,
+                result_queue=result_queue,
+                wait_inited=wait_inited,
+                echo_load=False,
+            )
+        )
+        stream_tasks.append(task)
+        await asyncio.sleep(interval)
+
+    # 收集全部结果（每条流无论成败都会回报一次）
+    for _ in range(max_streams):
+        r = await asyncio.wait_for(
+            result_queue.get(), timeout=connect_timeout + hold_secs + 30
+        )
+        if r.success:
+            summary.streams_succeeded += 1
+            summary.connect_ms_samples.append(r.connect_ms)
+        else:
+            summary.streams_failed += 1
+            if summary.first_failure_at is None:
+                summary.first_failure_at = r.stream_id
+            code = r.error_code or "UNKNOWN"
+            summary.error_breakdown[code] = summary.error_breakdown.get(code, 0) + 1
+
+    print(f"\n{'─'*60}")
+    print(f"建流完成：成功 {summary.streams_succeeded}/{max_streams}")
+    if summary.streams_succeeded > 0 and hold_secs > 0:
+        print(f"保持 {hold_secs}s 后关闭所有流...")
+        await asyncio.sleep(hold_secs)
+    hold_event.set()
+    if stream_tasks:
+        await asyncio.gather(*stream_tasks, return_exceptions=True)
+    return summary
+
+
 def print_summary(summary: TestSummary):
     print(f"\n{'='*60}")
     print(f"  测试结论")
@@ -525,16 +624,27 @@ async def main_async(args):
     if not host:
         host = DEFAULT_HOST
 
-    summary = await run_test(
-        host=host,
-        max_streams=args.max_streams,
-        batch_size=args.batch_size,
-        connect_timeout=args.connect_timeout,
-        hold_secs=args.hold_secs,
-        config=config,
-        wait_inited=not args.no_wait_inited,
-        echo_load=args.echo_load,
-    )
+    if args.ramp_rate > 0:
+        summary = await run_ramped_test(
+            host=host,
+            max_streams=args.max_streams,
+            ramp_rate=args.ramp_rate,
+            connect_timeout=args.connect_timeout,
+            hold_secs=args.hold_secs,
+            config=config,
+            wait_inited=not args.no_wait_inited,
+        )
+    else:
+        summary = await run_test(
+            host=host,
+            max_streams=args.max_streams,
+            batch_size=args.batch_size,
+            connect_timeout=args.connect_timeout,
+            hold_secs=args.hold_secs,
+            config=config,
+            wait_inited=not args.no_wait_inited,
+            echo_load=args.echo_load,
+        )
     print_summary(summary)
 
     if args.echo_load and summary.echo_results:
@@ -563,6 +673,10 @@ def main():
                         help="gRPC buffer 压力测试：inited 后持续发音频帧并接收 echo，"
                              "检测 send buffer 是否积压。服务端须以 "
                              "ENVIRONMENT=local TEST_PIPELINE_LIMIT=1 启动")
+    parser.add_argument("--ramp-rate", type=float, default=0.0,
+                        help="恒速 ramp 模式：每秒新建 N 条流（如 2 表示 2 条/秒），"
+                             "建立后全程不断开。用于区分 create_pipeline init 阻塞 vs "
+                             "runtime 负载。设为 0（默认）则使用原 batch 模式")
     args = parser.parse_args()
 
     asyncio.run(main_async(args))
